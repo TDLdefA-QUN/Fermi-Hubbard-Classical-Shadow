@@ -66,10 +66,43 @@ from qiskit_nature.second_q.algorithms import GroundStateEigensolver
 from qiskit_nature.second_q.mappers import JordanWignerMapper
 
 numpy_solver = NumPyMinimumEigensolver()
+from qiskit_nature.units import DistanceUnit
+from qiskit_nature.second_q.drivers import PySCFDriver
+
+driver = PySCFDriver(
+    atom="H 0 0 0; H 0 0 0.735",
+    basis="sto3g",
+    charge=0,
+    spin=0,
+    unit=DistanceUnit.ANGSTROM,
+)
+
+es_problem = driver.run()
 
 qubit_mapper = JordanWignerMapper()
+from qiskit.algorithms.minimum_eigensolvers import VQE
+from qiskit.algorithms.optimizers import SLSQP
+from qiskit.primitives import Estimator
+from qiskit_nature.second_q.circuit.library import HartreeFock, UCCSD
 
-calc = GroundStateEigensolver(qubit_mapper, numpy_solver)
+ansatz = UCCSD(
+    lmp.num_spatial_orbitals,
+    lmp.num_particles,
+    qubit_mapper,
+    initial_state=HartreeFock(
+        lmp.num_spatial_orbitals,
+        lmp.num_particles,
+        qubit_mapper,
+    ),
+)
+
+vqe_solver = VQE(Estimator(), ansatz, SLSQP())
+vqe_solver.initial_point = [0.0] * ansatz.num_parameters
+
+
+
+
+calc = GroundStateEigensolver(qubit_mapper, vqe_solver)
 res = calc.solve(lmp)
 
 print(res)
