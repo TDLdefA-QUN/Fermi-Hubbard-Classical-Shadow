@@ -1,123 +1,115 @@
-from qiskit import QuantumCircuit
-from math import pi
-
 import numpy as np
-import rustworkx as rx
 from qiskit_nature.second_q.hamiltonians.lattices import (
     BoundaryCondition,
     HyperCubicLattice,
-    Lattice,
-    LatticeDrawStyle,
     LineLattice,
     SquareLattice,
-    TriangularLattice,
 )
 from qiskit_nature.second_q.hamiltonians import FermiHubbardModel
-square_lattice = SquareLattice(rows=3, cols=2, boundary_condition=BoundaryCondition.PERIODIC)
-size = (2, 2, 2)
-boundary_condition = (
-    BoundaryCondition.PERIODIC,
-    BoundaryCondition.PERIODIC,
-    BoundaryCondition.PERIODIC,
-)
-cubic_lattice = HyperCubicLattice(size=size, boundary_condition=boundary_condition)
-
 from qiskit_nature.settings import QiskitNatureSettings
-QiskitNatureSettings.use_pauli_sum_op = False
-
-t = -1.0  # the interaction parameter
-v = 0.0  # the onsite potential
-u = 5.0  # the interaction parameter U
-
-fhm = FermiHubbardModel(
-    cubic_lattice.uniform_parameters(
-        uniform_interaction=t,
-        uniform_onsite_potential=v,
-    ),
-    onsite_interaction=u,
-)
-
-ham = fhm.second_q_op().simplify()
-print(ham)
-
 from qiskit_nature.second_q.problems import LatticeModelProblem
-
-lmp = LatticeModelProblem(fhm)
 from qiskit.algorithms.minimum_eigensolvers import NumPyMinimumEigensolver
 from qiskit_nature.second_q.algorithms import GroundStateEigensolver
 from qiskit_nature.second_q.mappers import JordanWignerMapper
-
-
-
-numpy_solver = NumPyMinimumEigensolver()
-
-
-qubit_mapper = JordanWignerMapper()
-
-calc = GroundStateEigensolver(qubit_mapper, numpy_solver)
-res = calc.solve(lmp)
-
-print(res)
-
-
-
-hamiltonian_jw = JordanWignerMapper().map(ham)
-#print(np.count_nonzero(hamiltonian_jw - np.diag(np.diagonal(hamiltonian_jw)))
-from qiskit import QuantumCircuit
-from qiskit.extensions import HamiltonianGate
-from qiskit.extensions import UnitaryGate
-print(hamiltonian_jw)
-
-
-from qiskit.algorithms import NumPyMinimumEigensolver
 from qiskit.opflow import PauliSumOp
-
-numpy_solver = NumPyMinimumEigensolver()
-result = numpy_solver.compute_minimum_eigenvalue(operator=PauliSumOp(hamiltonian_jw))
-ref_value = result.eigenvalue.real
-print(f"Reference value: {ref_value:.5f}")
 from qiskit.circuit.library import TwoLocal
 from qiskit.algorithms.optimizers import SPSA
-
-iterations = 125
-ansatz = TwoLocal(rotation_blocks="ry", entanglement_blocks="cz")
-spsa = SPSA(maxiter=iterations)
-counts = []
-values = []
-
-
-def store_intermediate_result(eval_count, parameters, mean, std):
-    counts.append(eval_count)
-    values.append(mean)
 from qiskit.utils import algorithm_globals
 from qiskit_aer.primitives import Estimator as AerEstimator
-
-seed = 170
-algorithm_globals.random_seed = seed
-
-noiseless_estimator = AerEstimator(
-    run_options={"seed": seed, "shots": 1024},
-    transpile_options={"seed_transpiler": seed},
-)
-
 from qiskit.algorithms.minimum_eigensolvers import VQE
-
-vqe = VQE(
-    noiseless_estimator, ansatz, optimizer=spsa, callback=store_intermediate_result
-)
-result = vqe.compute_minimum_eigenvalue(operator=hamiltonian_jw)
-
-print(f"VQE on Aer qasm simulator (no noise): {result.eigenvalue.real:.5f}")
-print(
-    f"Delta from reference energy value is {(result.eigenvalue.real - ref_value):.5f}"
-)
 import matplotlib.pyplot as plt
+from qiskit.quantum_info.operators.symplectic.sparse_pauli_op import SparsePauliOp
+
+# In order to use SparsePauliOp instead of PauliSumOp, we need to set the following
+QiskitNatureSettings.use_pauli_sum_op = False
+
+def create_fermi_hubbard_model():
+    uniform_parameters = {"uniform_interaction": -1.0, "uniform_onsite_potential": 0.0}
+
+    square_lattice = SquareLattice(
+        rows=3, cols=2, boundary_condition=BoundaryCondition.PERIODIC
+    )
+    square_lattice = square_lattice.uniform_parameters(**uniform_parameters)
+
+    size = (2, 2, 2)
+    cubic_lattice = HyperCubicLattice(
+        size=size, boundary_condition=BoundaryCondition.PERIODIC
+    )
+    cubic_lattice = cubic_lattice.uniform_parameters(**uniform_parameters)
+
+    u = 5.0  # the interaction parameter U
+    fhm = FermiHubbardModel(
+        cubic_lattice,
+        onsite_interaction=u,
+    )
+
+    return fhm
 
 
-plt.plot(counts, values)
-plt.xlabel("Eval count")
-plt.ylabel("Energy")
-plt.title("Convergence with no noise")
+def find_ground_state_energy_numpy(hamiltonian_jw: SparsePauliOp) -> float:
+    result = NumPyMinimumEigensolver().compute_minimum_eigenvalue(
+        operator=PauliSumOp(hamiltonian_jw)
+    )
+    result = result.eigenvalue.real
 
-plt.show()
-print(f'Number of qubits: {hamiltonian_jw.num_qubits}')
+    return result
+
+def find_ground_state_energy_vqe(hamiltonian_jw: SparsePauliOp) -> float:
+    iterations = 125
+    ansatz = TwoLocal(rotation_blocks="ry", entanglement_blocks="cz")
+    spsa = SPSA(maxiter=iterations)
+    seed = 170
+    algorithm_globals.random_seed = seed
+    counts = []
+    values = []
+
+    def store_intermediate_result(eval_count, parameters, mean, std):
+        counts.append(eval_count)
+        values.append(mean)
+
+    noiseless_estimator = AerEstimator(
+        run_options={"seed": seed, "shots": 1024},
+        transpile_options={"seed_transpiler": seed},
+    )
+
+    vqe = VQE(
+        noiseless_estimator, ansatz, optimizer=spsa, callback=store_intermediate_result
+    )
+    result = vqe.compute_minimum_eigenvalue(operator=hamiltonian_jw)
+
+    return result, counts, values
+
+
+def plot_convergence(counts, values):
+    plt.plot(counts, values)
+    plt.xlabel("Eval count")
+    plt.ylabel("Energy")
+    plt.title("Convergence with no noise")
+    plt.show()
+
+
+def main():
+    fhm = create_fermi_hubbard_model()
+
+    ham = fhm.second_q_op().simplify()
+    print("\n\nSecond quantized hamiltonian: \n", ham)
+
+    hamiltonian_jw = JordanWignerMapper().map(ham)
+    print("\n\nQubit hamiltonian: \n", hamiltonian_jw)
+    print(f"\nNumber of qubits: {hamiltonian_jw.num_qubits}")
+
+    ref_value = find_ground_state_energy_numpy(hamiltonian_jw)
+    print(f"\nReference value: {ref_value:.5f}\n")
+
+    result, counts, values = find_ground_state_energy_vqe(hamiltonian_jw)
+
+    print(f"VQE on Aer qasm simulator (no noise): {result.eigenvalue.real:.5f}")
+    print(
+        f"Delta from reference energy value is {(result.eigenvalue.real - ref_value):.5f}"
+    )
+
+    plot_convergence(counts, values)
+
+
+if __name__ == "__main__":
+    main()
