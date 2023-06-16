@@ -1,3 +1,4 @@
+from qiskit import QuantumCircuit
 from math import pi
 
 import numpy as np
@@ -13,6 +14,9 @@ from qiskit_nature.second_q.hamiltonians.lattices import (
 )
 from qiskit_nature.second_q.hamiltonians import FermiHubbardModel
 square_lattice = SquareLattice(rows=5, cols=4, boundary_condition=BoundaryCondition.PERIODIC)
+
+from qiskit_nature.settings import QiskitNatureSettings
+QiskitNatureSettings.use_pauli_sum_op = False
 
 t = -1.0  # the interaction parameter
 v = 0.0  # the onsite potential
@@ -46,6 +50,7 @@ fhm = FermiHubbardModel(lattice=general_lattice, onsite_interaction=u)
 
 ham = fhm.second_q_op().simplify()
 print(ham)
+
 from qiskit_nature.second_q.problems import LatticeModelProblem
 
 num_nodes = 4
@@ -65,45 +70,22 @@ from qiskit.algorithms.minimum_eigensolvers import NumPyMinimumEigensolver
 from qiskit_nature.second_q.algorithms import GroundStateEigensolver
 from qiskit_nature.second_q.mappers import JordanWignerMapper
 
+
+
 numpy_solver = NumPyMinimumEigensolver()
-from qiskit_nature.units import DistanceUnit
-from qiskit_nature.second_q.drivers import PySCFDriver
 
-driver = PySCFDriver(
-    atom="H 0 0 0; H 0 0 0.735",
-    basis="sto3g",
-    charge=0,
-    spin=0,
-    unit=DistanceUnit.ANGSTROM,
-)
-
-es_problem = driver.run()
 
 qubit_mapper = JordanWignerMapper()
-from qiskit.algorithms.minimum_eigensolvers import VQE
-from qiskit.algorithms.optimizers import SLSQP
-from qiskit.primitives import Estimator
-from qiskit_nature.second_q.circuit.library import HartreeFock, UCCSD
 
-ansatz = UCCSD(
-    lmp.num_spatial_orbitals,
-    lmp.num_particles,
-    qubit_mapper,
-    initial_state=HartreeFock(
-        lmp.num_spatial_orbitals,
-        lmp.num_particles,
-        qubit_mapper,
-    ),
-)
-
-vqe_solver = VQE(Estimator(), ansatz, SLSQP())
-vqe_solver.initial_point = [0.0] * ansatz.num_parameters
-
-
-
-
-calc = GroundStateEigensolver(qubit_mapper, vqe_solver)
+calc = GroundStateEigensolver(qubit_mapper, numpy_solver)
 res = calc.solve(lmp)
 
 print(res)
+
+
+
+hamiltonian_jw = JordanWignerMapper().map(ham).to_matrix()
+#print(np.count_nonzero(hamiltonian_jw - np.diag(np.diagonal(hamiltonian_jw)))
+print(hamiltonian_jw)
+
 
