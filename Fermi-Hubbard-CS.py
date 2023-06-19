@@ -1,27 +1,24 @@
-import numpy as np
+import matplotlib.pyplot as plt
+from qiskit.algorithms.minimum_eigensolvers import NumPyMinimumEigensolver
+from qiskit.algorithms.minimum_eigensolvers import VQE
+from qiskit.algorithms.optimizers import SPSA
+from qiskit.circuit.library import TwoLocal
+from qiskit.opflow import PauliSumOp
+from qiskit.quantum_info.operators.symplectic.sparse_pauli_op import SparsePauliOp
+from qiskit.utils import algorithm_globals
+from qiskit_aer.primitives import Estimator as AerEstimator
+from qiskit_nature.second_q.hamiltonians import FermiHubbardModel
 from qiskit_nature.second_q.hamiltonians.lattices import (
     BoundaryCondition,
     HyperCubicLattice,
-    LineLattice,
     SquareLattice,
 )
-from qiskit_nature.second_q.hamiltonians import FermiHubbardModel
-from qiskit_nature.settings import QiskitNatureSettings
-from qiskit_nature.second_q.problems import LatticeModelProblem
-from qiskit.algorithms.minimum_eigensolvers import NumPyMinimumEigensolver
-from qiskit_nature.second_q.algorithms import GroundStateEigensolver
 from qiskit_nature.second_q.mappers import JordanWignerMapper
-from qiskit.opflow import PauliSumOp
-from qiskit.circuit.library import TwoLocal
-from qiskit.algorithms.optimizers import SPSA
-from qiskit.utils import algorithm_globals
-from qiskit_aer.primitives import Estimator as AerEstimator
-from qiskit.algorithms.minimum_eigensolvers import VQE
-import matplotlib.pyplot as plt
-from qiskit.quantum_info.operators.symplectic.sparse_pauli_op import SparsePauliOp
+from qiskit_nature.settings import QiskitNatureSettings
 
 # In order to use SparsePauliOp instead of PauliSumOp, we need to set the following
 QiskitNatureSettings.use_pauli_sum_op = False
+
 
 def create_fermi_hubbard_model():
     uniform_parameters = {"uniform_interaction": -1.0, "uniform_onsite_potential": 0.0}
@@ -53,6 +50,7 @@ def find_ground_state_energy_numpy(hamiltonian_jw: SparsePauliOp) -> float:
     result = result.eigenvalue.real
 
     return result
+
 
 def find_ground_state_energy_vqe(hamiltonian_jw: SparsePauliOp) -> float:
     iterations = 125
