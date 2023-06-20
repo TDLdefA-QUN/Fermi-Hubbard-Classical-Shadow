@@ -1,18 +1,20 @@
-from qiskit import QuantumCircuit
-from math import pi
-
-import numpy as np
-import rustworkx as rx
+from qiskit_nature.second_q.hamiltonians import FermiHubbardModel
 from qiskit_nature.second_q.hamiltonians.lattices import (
     BoundaryCondition,
     HyperCubicLattice,
-    Lattice,
-    LatticeDrawStyle,
-    LineLattice,
     SquareLattice,
-    TriangularLattice,
 )
-from qiskit_nature.second_q.hamiltonians import FermiHubbardModel
+from qiskit_nature.second_q.mappers import JordanWignerMapper
+from qiskit_nature.second_q.problems import LatticeModelProblem
+from qiskit.algorithms import NumPyMinimumEigensolver
+from qiskit.opflow import PauliSumOp
+from qiskit_nature.settings import QiskitNatureSettings
+from qiskit.circuit.library import TwoLocal
+from qiskit.algorithms.optimizers import SPSA
+from qiskit.utils import algorithm_globals
+from qiskit_aer.primitives import Estimator as AerEstimator
+from qiskit.algorithms.minimum_eigensolvers import VQE
+
 
 t = -1.0  # the interaction parameter
 v = 0.0  # the onsite potential
@@ -39,7 +41,7 @@ boundary_condition = (
 )
 cubic_lattice = HyperCubicLattice(size=size, boundary_condition=boundary_condition)
 
-from qiskit_nature.settings import QiskitNatureSettings
+
 QiskitNatureSettings.use_pauli_sum_op = False
 
 t = -1.0  # the interaction parameter
@@ -57,33 +59,19 @@ fhm_cubic = FermiHubbardModel(
 ham = fhm_cubic.second_q_op()
 print(ham)
 
-from qiskit_nature.second_q.problems import LatticeModelProblem
+
 
 lmp = LatticeModelProblem(fhm_cubic)
-from qiskit.algorithms.minimum_eigensolvers import NumPyMinimumEigensolver
-from qiskit_nature.second_q.algorithms import GroundStateEigensolver
-from qiskit_nature.second_q.mappers import JordanWignerMapper
-
-
-
 
 hamiltonian_jw = JordanWignerMapper().map(ham)
 #print(np.count_nonzero(hamiltonian_jw - np.diag(np.diagonal(hamiltonian_jw)))
-from qiskit import QuantumCircuit
-from qiskit.extensions import HamiltonianGate
-from qiskit.extensions import UnitaryGate
 print(hamiltonian_jw)
 
-
-from qiskit.algorithms import NumPyMinimumEigensolver
-from qiskit.opflow import PauliSumOp
 
 numpy_solver = NumPyMinimumEigensolver()
 result = numpy_solver.compute_minimum_eigenvalue(operator=PauliSumOp(hamiltonian_jw))
 ref_value = result.eigenvalue.real
 print(f"Reference value: {ref_value:.5f}")
-from qiskit.circuit.library import TwoLocal
-from qiskit.algorithms.optimizers import SPSA
 
 iterations = 125
 ansatz = TwoLocal(rotation_blocks="ry", entanglement_blocks="cz")
@@ -95,8 +83,7 @@ values = []
 def store_intermediate_result(eval_count, parameters, mean, std):
     counts.append(eval_count)
     values.append(mean)
-from qiskit.utils import algorithm_globals
-from qiskit_aer.primitives import Estimator as AerEstimator
+
 
 seed = 170
 algorithm_globals.random_seed = seed
@@ -109,7 +96,7 @@ noiseless_estimator = AerEstimator(
 )
 
 
-from qiskit.algorithms.minimum_eigensolvers import VQE
+
 
 vqe = VQE(
     noiseless_estimator, ansatz, optimizer=spsa, callback=store_intermediate_result
