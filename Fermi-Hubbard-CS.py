@@ -10,7 +10,7 @@ from qiskit.algorithms import NumPyMinimumEigensolver
 from qiskit.opflow import PauliSumOp
 from qiskit_nature.settings import QiskitNatureSettings
 from qiskit.circuit.library import TwoLocal
-from qiskit.algorithms.optimizers import SPSA
+from qiskit.algorithms.optimizers import SLSQP,SPSA
 from qiskit.utils import algorithm_globals
 from qiskit_aer.primitives import Estimator as AerEstimator
 from qiskit.algorithms.minimum_eigensolvers import VQE
@@ -21,131 +21,66 @@ import pennylane.numpy as np
 import matplotlib.pyplot as plt
 import time
 
-t = -1.0  # the interaction parameter
-v = 0.0  # the onsite potential
-u = 5.0
 
-###
-### Second Quantized Hamiltonian (Fermi-Hubbard model)
-###
-square_lattice = SquareLattice(rows=3, cols=2, boundary_condition=BoundaryCondition.PERIODIC)
+def cubic_FHM(t, v, u, size):
+    '''
+    Second Quantized Hamiltonian for the Fermi-Hubbard model in a periodic cube
+    Returns the hamiltonian
+    :param self:
+    :param t:
+    :param v:
+    :param u:
+    :return:
+    '''
 
-fhm_square = FermiHubbardModel(
-    square_lattice.uniform_parameters(
-        uniform_interaction=t,
-        uniform_onsite_potential=v,
-    ),
-    onsite_interaction=u,
-)
+    # t = -1.0  # the interaction parameter
+    # v = 0.0  # the onsite potential
+    # u = 5.0
+    # size = (2, 2, 2)
 
-size = (2, 2, 2)
-boundary_condition = (
-    BoundaryCondition.PERIODIC,
-    BoundaryCondition.PERIODIC,
-    BoundaryCondition.PERIODIC,
-)
-cubic_lattice = HyperCubicLattice(size=size, boundary_condition=boundary_condition)
+    boundary_condition = (
+        BoundaryCondition.PERIODIC,
+        BoundaryCondition.PERIODIC,
+        BoundaryCondition.PERIODIC,
+    )
+    cubic_lattice = HyperCubicLattice(size=size, boundary_condition=boundary_condition)
 
-QiskitNatureSettings.use_pauli_sum_op = False
+    QiskitNatureSettings.use_pauli_sum_op = False
 
-fhm_cubic = FermiHubbardModel(
-    cubic_lattice.uniform_parameters(
-        uniform_interaction=t,
-        uniform_onsite_potential=v,
-    ),
-    onsite_interaction=u,
-)
+    fhm_cubic = FermiHubbardModel(
+        cubic_lattice.uniform_parameters(
+            uniform_interaction=t,
+            uniform_onsite_potential=v,
+        ),
+        onsite_interaction=u,
+    )
 
-ham = fhm_cubic.second_q_op()
-print(ham)
+    ham = fhm_cubic.second_q_op()
+    # print(ham)
+    return ham
+
+
 ###
 
 
 ###
 ### Embed the Hamiltonian
 ###
-
-lmp = LatticeModelProblem(fhm_cubic)
-
-hamiltonian_jw = JordanWignerMapper().map(ham)
-# print(np.count_nonzero(hamiltonian_jw - np.diag(np.diagonal(hamiltonian_jw)))
-print(hamiltonian_jw)
-
-###
-### Classical solver
-###
-numpy_solver = NumPyMinimumEigensolver()
-result = numpy_solver.compute_minimum_eigenvalue(operator=PauliSumOp(hamiltonian_jw))
-ref_value = result.eigenvalue.real
-print(f"Reference value: {ref_value:.5f}")
-
-###
-### VQE See Peruzzo, A., et al, “A variational eigenvalue solver on a quantum processor” arXiv:1304.3061
-###
+### What is this?
+# lmp = LatticeModelProblem(fhm_cubic)
 
 
-iterations = 125
-ansatz = TwoLocal(rotation_blocks="ry", entanglement_blocks="cz")
-spsa = SPSA(maxiter=iterations)
-counts = []
-values = []
+def classical_solver(mapped_hamiltonian):
+    numpy_solver = NumPyMinimumEigensolver()
+    result = numpy_solver.compute_minimum_eigenvalue(operator=PauliSumOp(mapped_hamiltonian))
+    ref_value = result.eigenvalue
+    print(f"Reference value: {ref_value:.5f}")
+    return ref_value
 
-
-def store_intermediate_result(eval_count, parameters, mean, std):
-    counts.append(eval_count)
-    values.append(mean)
-
-
-seed = 170
-algorithm_globals.random_seed = seed
-
-noiseless_estimator = AerEstimator(
-    run_options={"seed": seed, "shots": 1024},
-    transpile_options={"seed_transpiler": seed},
-    backend_options={"method": "automatic"}
-
-)
-
-vqe = VQE(
-    noiseless_estimator, ansatz, optimizer=spsa, callback=store_intermediate_result
-)
-result = vqe.compute_minimum_eigenvalue(operator=hamiltonian_jw)
-
-print(f"VQE on Aer qasm simulator (no noise): {result.eigenvalue.real:.5f}")
-print(
-    f"Delta from reference energy value is {(result.eigenvalue.real - ref_value):.5f}"
-)
-import matplotlib.pyplot as plt
-
-plt.plot(counts, values)
-plt.xlabel("Eval count")
-plt.ylabel("Energy")
-plt.title("Convergence with no noise")
-
-plt.show()
-
-##
-## Reconstruct the state
-##
-result.optimal_circuit.draw(output='mpl')
-
-##
-## Now we move to pennylane for classical shadows
-##
-# First we need to convert the optimized circuit from Qiskit VQE to a Pennylane qnode
-
-dev = qml.device('lightning.gpu', wires=hamiltonian_jw.num_qubits)
-
-
-@qml.qnode(dev)
-def tomography_circuit(params, **kwargs):
-    observables = kwargs.pop("observable")
-    qml.from_qiskit(result.optimal_circuit)
-    return [qml.expval(o) for o in observables]
 
 
 # Helper functions for classical shadow (see https://pennylane.ai/qml/demos/tutorial_classical_shadows)
-np.random.seed(seed=int(time.time()))
+
 
 def calculate_classical_shadow(circuit_template, params, shadow_size, num_qubits):
     """
@@ -178,6 +113,8 @@ def calculate_classical_shadow(circuit_template, params, shadow_size, num_qubits
 
     # combine the computational basis outcomes and the sampled unitaries
     return (outcomes, unitary_ids)
+
+
 def snapshot_state(b_list, obs_list):
     """
     Helper function for `shadow_state_reconstruction` that reconstructs
@@ -240,20 +177,80 @@ def shadow_state_reconstruction(shadow):
         shadow_rho += snapshot_state(b_lists[i], obs_lists[i])
 
     return shadow_rho / num_snapshots
-#Now construct the shadow state
-num_snapshots = 1000
-params = []
 
-shadow = calculate_classical_shadow(
-    tomography_circuit, params, num_snapshots, hamiltonian_jw.num_qubits
-)
-print(shadow[0])
-print(shadow[1])
-shadow_state = shadow_state_reconstruction(shadow)
-print(np.round(shadow_state, decimals=6))
-###
-### Outro
-###
-print(f'Number of qubits: {hamiltonian_jw.num_qubits}')
 
-print('RAM Used (GB):', psutil.virtual_memory()[3] / 1000000000)
+def main():
+    seed = np.random.seed(seed=int(time.time()))
+    hamiltonian_jw = JordanWignerMapper().map(cubic_FHM(t=-1.0, v=0, u=5.0, size=(2, 2, 2)))
+    print(hamiltonian_jw)
+    reference_eigenvalue=classical_solver(hamiltonian_jw)
+
+    ###
+    ### VQE See Peruzzo, A., et al, “A variational eigenvalue solver on a quantum processor” arXiv:1304.3061
+    ###
+
+    ansatz = TwoLocal(rotation_blocks="ry", entanglement_blocks="cz")
+    counts = []
+    values = []
+    algorithm_globals.random_seed = seed
+
+    def store_intermediate_result(eval_count, parameters, mean, std):
+        counts.append(eval_count)
+        values.append(mean)
+
+    noiseless_estimator = AerEstimator(
+        run_options={"seed": seed, "shots": 1024},
+        transpile_options={"seed_transpiler": seed},
+        backend_options={"method": "automatic"}
+    )
+    optimizer=SPSA(maxiter=200)
+    vqe = VQE(
+        noiseless_estimator, ansatz, optimizer=optimizer, callback=store_intermediate_result
+    )
+    result = vqe.compute_minimum_eigenvalue(operator=hamiltonian_jw)
+
+    print(f"VQE on Aer qasm simulator (no noise): {result.eigenvalue:.5f}")
+    print(
+        f"Delta from reference energy value is {abs(result.eigenvalue - reference_eigenvalue):.5f}"
+    )
+    import matplotlib.pyplot as plt
+
+    plt.plot(counts, values)
+    plt.xlabel("Eval count")
+    plt.ylabel("Energy")
+    plt.title("Convergence with no noise")
+
+    plt.show()
+
+    ##
+    ## Now we move to pennylane for classical shadows
+    ##
+    # First we need to convert the optimized circuit from Qiskit VQE to a Pennylane qnode
+    dev = qml.device('default.qubit', wires=hamiltonian_jw.num_qubits)
+
+    @qml.qnode(dev)
+    def tomography_circuit(params, **kwargs):
+        observables = kwargs.pop("observable")
+        qml.from_qiskit(result.optimal_circuit)
+        return [qml.expval(o) for o in observables]
+
+    # Now construct the shadow state
+    num_snapshots = 1000
+    params = []
+    shadow = calculate_classical_shadow(
+        tomography_circuit, params, num_snapshots, hamiltonian_jw.num_qubits
+    )
+    print(shadow[0])
+    print(shadow[1])
+    #shadow_state = shadow_state_reconstruction(shadow)
+    #print(np.round(shadow_state, decimals=6))
+
+    ###
+    ### Outro
+    ###
+    print(f'Number of qubits: {hamiltonian_jw.num_qubits}')
+    print('RAM Used (GB):', psutil.virtual_memory()[3] / 1000000000)
+
+
+if __name__ == "__main__":
+    main()
