@@ -10,16 +10,18 @@ from qiskit.algorithms import NumPyMinimumEigensolver
 from qiskit.opflow import PauliSumOp
 from qiskit_nature.settings import QiskitNatureSettings
 from qiskit.circuit.library import TwoLocal
-from qiskit.algorithms.optimizers import SLSQP,SPSA
+from qiskit.algorithms.optimizers import SLSQP, SPSA
 from qiskit.utils import algorithm_globals
 from qiskit_aer.primitives import Estimator as AerEstimator
 from qiskit.algorithms.minimum_eigensolvers import VQE
 from qiskit.algorithms.optimizers import Optimizer, OptimizerResult, OptimizerState
+from qiskit import Aer, transpile
 import psutil
 import pennylane as qml
 import pennylane.numpy as np
 import matplotlib.pyplot as plt
 import time
+import argparse
 
 
 def cubic_FHM(t, v, u, size):
@@ -27,9 +29,10 @@ def cubic_FHM(t, v, u, size):
     Second Quantized Hamiltonian for the Fermi-Hubbard model in a periodic cube
     Returns the hamiltonian
     :param self:
-    :param t:
-    :param v:
+    :param t:the interaction parameter
+    :param v:the onsite potential
     :param u:
+    :param size: Size of the lattice
     :return:
     '''
 
@@ -76,7 +79,6 @@ def classical_solver(mapped_hamiltonian):
     ref_value = result.eigenvalue
     print(f"Reference value: {ref_value:.5f}")
     return ref_value
-
 
 
 # Helper functions for classical shadow (see https://pennylane.ai/qml/demos/tutorial_classical_shadows)
@@ -181,9 +183,11 @@ def shadow_state_reconstruction(shadow):
 
 def main():
     seed = np.random.seed(seed=int(time.time()))
-    hamiltonian_jw = JordanWignerMapper().map(cubic_FHM(t=-1.0, v=0, u=5.0, size=(2, 2, 2)))
-    print(hamiltonian_jw)
-    reference_eigenvalue=classical_solver(hamiltonian_jw)
+    hamiltonian_jw = JordanWignerMapper().map(cubic_FHM(t=-args.hubbard_t, v=args.hubbard_v, u=args.hubbard_u, size=(
+        args.hubbard_size[0], args.hubbard_size[1], args.hubbard_size[2])))
+    if args.verbose > 1:
+        print(hamiltonian_jw)
+    reference_eigenvalue = classical_solver(hamiltonian_jw)
 
     ###
     ### VQE See Peruzzo, A., et al, “A variational eigenvalue solver on a quantum processor” arXiv:1304.3061
@@ -203,7 +207,10 @@ def main():
         transpile_options={"seed_transpiler": seed},
         backend_options={"method": "automatic"}
     )
-    optimizer=SPSA(maxiter=200)
+    if args.vqe_optimizer=='spsa':
+        optimizer=SPSA(maxiter=args.vqe_maxsteps)
+    if args.vqe_optimizer == 'slsqp':
+        optimizer = SLSQP(maxiter=args.vqe_maxsteps)
     vqe = VQE(
         noiseless_estimator, ansatz, optimizer=optimizer, callback=store_intermediate_result
     )
@@ -240,10 +247,11 @@ def main():
     shadow = calculate_classical_shadow(
         tomography_circuit, params, num_snapshots, hamiltonian_jw.num_qubits
     )
-    print(shadow[0])
-    print(shadow[1])
-    #shadow_state = shadow_state_reconstruction(shadow)
-    #print(np.round(shadow_state, decimals=6))
+    if args.verbose>2:
+        print(shadow[0])
+        print(shadow[1])
+    # shadow_state = shadow_state_reconstruction(shadow)
+    # print(np.round(shadow_state, decimals=6))
 
     ###
     ### Outro
@@ -253,4 +261,24 @@ def main():
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Fermi Hubbard Classical Shadow')
+    parser.add_argument("-v", "--verbose", action="store_true", help="increase output verbosity")
+    parser.add_argument("-ht", "--hubbard_t", type=float, default="-1.0", action="store", help="Interaction matrix")
+    parser.add_argument("-hv", "--hubbard_v", type=float, default="0.0", action="store", help="Onsite parameter")
+    parser.add_argument("-hu", "--hubbard_u", type=float, default="5.0", action="store", help="Onsite parameter")
+    parser.add_argument("-hs", "--hubbard_size", type=int, nargs=3, default=[2, 2, 2], metavar=('nx', 'ny', 'nz'),
+                        action="store", help="Size of the cubic lattice")
+    parser.add_argument("-vqemax", "--vqe_maxsteps", type=int, default=200, action="store", help="VQE max steps")
+    parser.add_argument("-vqeopt", "--vqe_optimizer", default='spsa', choices=['spsa', 'slsqp'], help="VQE optimizer")
+    args = parser.parse_args()
+    print("Qiskit Related:")
+    print(Aer.backends())
+    print("Fermi-Hubbard parameters:")
+    print("t:", args.hubbard_t)
+    print("v:", args.hubbard_v)
+    print("u:", args.hubbard_u)
+    print("Size of the SC lattice:", args.hubbard_size)
+    print("VQE parameters:")
+    print("Optimizer:",args.vqe_optimizer)
+    print("max iterations:",args.vqe_maxsteps)
     main()
