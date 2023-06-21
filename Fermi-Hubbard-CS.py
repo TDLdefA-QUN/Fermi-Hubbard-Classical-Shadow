@@ -207,8 +207,8 @@ def main():
         transpile_options={"seed_transpiler": seed},
         backend_options={"method": "automatic"}
     )
-    if args.vqe_optimizer=='spsa':
-        optimizer=SPSA(maxiter=args.vqe_maxsteps)
+    if args.vqe_optimizer == 'spsa':
+        optimizer = SPSA(maxiter=args.vqe_maxsteps)
     if args.vqe_optimizer == 'slsqp':
         optimizer = SLSQP(maxiter=args.vqe_maxsteps)
     vqe = VQE(
@@ -227,7 +227,7 @@ def main():
     plt.ylabel("Energy")
     plt.title("Convergence with no noise")
 
-    plt.show()
+    plt.savefig('VQE_result-{}-{}iter.png'.format(args.vqe_optimizer, args.vqe_maxsteps))
 
     ##
     ## Now we move to pennylane for classical shadows
@@ -247,11 +247,11 @@ def main():
     shadow = calculate_classical_shadow(
         tomography_circuit, params, num_snapshots, hamiltonian_jw.num_qubits
     )
-    if args.verbose>2:
+    if args.verbose > 2:
         print(shadow[0])
         print(shadow[1])
-    # shadow_state = shadow_state_reconstruction(shadow)
-    # print(np.round(shadow_state, decimals=6))
+    shadow_state = shadow_state_reconstruction(shadow)
+    print(np.round(shadow_state, decimals=6))
 
     ###
     ### Outro
@@ -270,15 +270,20 @@ if __name__ == "__main__":
                         action="store", help="Size of the cubic lattice")
     parser.add_argument("-vqemax", "--vqe_maxsteps", type=int, default=200, action="store", help="VQE max steps")
     parser.add_argument("-vqeopt", "--vqe_optimizer", default='spsa', choices=['spsa', 'slsqp'], help="VQE optimizer")
+    parser.add_argument("-cs", "--classical_snapshots", type=int, default=1000, action="store",
+                        help="Classical shadow snapshots")
     args = parser.parse_args()
-    print("Qiskit Related:")
-    print(Aer.backends())
+    if args.verbose:
+        print("Qiskit Related:")
+        print(Aer.backends())
     print("Fermi-Hubbard parameters:")
     print("t:", args.hubbard_t)
     print("v:", args.hubbard_v)
     print("u:", args.hubbard_u)
     print("Size of the SC lattice:", args.hubbard_size)
     print("VQE parameters:")
-    print("Optimizer:",args.vqe_optimizer)
-    print("max iterations:",args.vqe_maxsteps)
+    print("Optimizer:", args.vqe_optimizer)
+    print("max iterations:", args.vqe_maxsteps)
+    print("Classical shadow related:")
+    print("No snapshots:", args.classical_snapshots)
     main()
