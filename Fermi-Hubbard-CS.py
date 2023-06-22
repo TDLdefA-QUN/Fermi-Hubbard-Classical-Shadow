@@ -230,6 +230,8 @@ def main():
 
     # Density matrix of the final optimized state
     # print(result.optimal_circuit.data[0])
+    qiskit_density_matrix=DensityMatrix.from_instruction(result.optimal_circuit)
+    print(qiskit_density_matrix)
     ##
     ## Now we move to pennylane for classical shadows
     ##
@@ -245,9 +247,9 @@ def main():
         qml.from_qiskit(result.optimal_circuit)
         return [qml.expval(o) for o in observables]
 
-    def comparison_circuit():
-        qml.from_qiskit(result.optimal_circuit)
-        return qml.density_matrix()
+    #def comparison_circuit():
+    #   qml.from_qiskit(result.optimal_circuit)
+    #    return qml.density_matrix(wires=hamiltonian_jw.num_qubits)
 
     # Now construct the shadow state
     num_snapshots = args.classical_snapshots
@@ -260,7 +262,7 @@ def main():
         print(shadow[1])
     shadow_state = shadow_state_reconstruction(shadow)
     print(np.round(shadow_state, decimals=6))
-    print("Fidelity=", qml.math.fidelity(shadow_state, comparison_circuit()))
+    print("Fidelity=", qml.math.fidelity(shadow_state, qiskit_density_matrix))
 
     ###
     ### Outro
