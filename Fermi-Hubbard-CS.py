@@ -16,6 +16,7 @@ from qiskit_aer.primitives import Estimator as AerEstimator
 from qiskit.algorithms.minimum_eigensolvers import VQE
 from qiskit.algorithms.optimizers import Optimizer, OptimizerResult, OptimizerState
 from qiskit import Aer, transpile
+from qiskit.quantum_info import DensityMatrix
 import psutil
 import pennylane as qml
 import pennylane.numpy as np
@@ -69,9 +70,6 @@ def cubic_FHM(t, v, u, size):
 ###
 ### Embed the Hamiltonian
 ###
-### What is this?
-# lmp = LatticeModelProblem(fhm_cubic)
-
 
 def classical_solver(mapped_hamiltonian):
     numpy_solver = NumPyMinimumEigensolver()
@@ -176,6 +174,7 @@ def shadow_state_reconstruction(shadow):
     # Averaging over snapshot states.
     shadow_rho = np.zeros((2 ** num_qubits, 2 ** num_qubits), dtype=complex)
     for i in range(num_snapshots):
+        print("iteration {:05d} of {:05d}".format(i, num_snapshots))
         shadow_rho += snapshot_state(b_lists[i], obs_lists[i])
 
     return shadow_rho / num_snapshots
@@ -183,7 +182,7 @@ def shadow_state_reconstruction(shadow):
 
 def main():
     seed = np.random.seed(seed=int(time.time()))
-    hamiltonian_jw = JordanWignerMapper().map(cubic_FHM(t=-args.hubbard_t, v=args.hubbard_v, u=args.hubbard_u, size=(
+    hamiltonian_jw = JordanWignerMapper().map(cubic_FHM(t=args.hubbard_t, v=args.hubbard_v, u=args.hubbard_u, size=(
         args.hubbard_size[0], args.hubbard_size[1], args.hubbard_size[2])))
     if args.verbose > 1:
         print(hamiltonian_jw)
@@ -229,11 +228,16 @@ def main():
 
     plt.savefig('VQE_result-{}-{}iter.png'.format(args.vqe_optimizer, args.vqe_maxsteps))
 
+    # Density matrix of the final optimized state
+    # print(result.optimal_circuit.data[0])
     ##
     ## Now we move to pennylane for classical shadows
     ##
     # First we need to convert the optimized circuit from Qiskit VQE to a Pennylane qnode
-    dev = qml.device('default.qubit', wires=hamiltonian_jw.num_qubits)
+    if args.gpu:
+        dev = qml.device('lightning.gpu', wires=hamiltonian_jw.num_qubits)
+    else:
+        dev = qml.device('default.qubit', wires=hamiltonian_jw.num_qubits)
 
     @qml.qnode(dev)
     def tomography_circuit(params, **kwargs):
@@ -241,8 +245,12 @@ def main():
         qml.from_qiskit(result.optimal_circuit)
         return [qml.expval(o) for o in observables]
 
+    def comparison_circuit():
+        qml.from_qiskit(result.optimal_circuit)
+        return qml.density_matrix()
+
     # Now construct the shadow state
-    num_snapshots = 1000
+    num_snapshots = args.classical_snapshots
     params = []
     shadow = calculate_classical_shadow(
         tomography_circuit, params, num_snapshots, hamiltonian_jw.num_qubits
@@ -252,6 +260,7 @@ def main():
         print(shadow[1])
     shadow_state = shadow_state_reconstruction(shadow)
     print(np.round(shadow_state, decimals=6))
+    print("Fidelity=", qml.math.fidelity(shadow_state, comparison_circuit()))
 
     ###
     ### Outro
@@ -272,6 +281,8 @@ if __name__ == "__main__":
     parser.add_argument("-vqeopt", "--vqe_optimizer", default='spsa', choices=['spsa', 'slsqp'], help="VQE optimizer")
     parser.add_argument("-cs", "--classical_snapshots", type=int, default=1000, action="store",
                         help="Classical shadow snapshots")
+    parser.add_argument("-gpu", default=False, action="store_true",
+                        help="Enable GPU")
     args = parser.parse_args()
     if args.verbose:
         print("Qiskit Related:")
@@ -286,4 +297,7 @@ if __name__ == "__main__":
     print("max iterations:", args.vqe_maxsteps)
     print("Classical shadow related:")
     print("No snapshots:", args.classical_snapshots)
+    print("")
+    if args.gpu:
+        print("GPU will be used")
     main()
