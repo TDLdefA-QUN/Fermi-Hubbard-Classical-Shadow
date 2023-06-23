@@ -18,7 +18,7 @@ from qiskit_aer.primitives import Estimator as AerEstimator
 from qiskit.algorithms.minimum_eigensolvers import VQE
 from qiskit.algorithms.optimizers import Optimizer, OptimizerResult, OptimizerState
 from qiskit import Aer, transpile
-from qiskit.quantum_info import DensityMatrix,state_fidelity
+from qiskit.quantum_info import DensityMatrix, state_fidelity
 import psutil
 import pennylane as qml
 import pennylane.numpy as np
@@ -115,9 +115,9 @@ def simulator_density_matrix(circuit, use_gpu=True):
             simulator.set_options(device='GPU')
         except:
             print("GPU not found")
-    circuit=transpile(circuit,simulator)
+    circuit = transpile(circuit, simulator)
     result = simulator.run(circuit).result()
-    density_matrix=DensityMatrix(result.get_statevector(circuit))
+    density_matrix = DensityMatrix(result.get_statevector(circuit))
     return density_matrix
 
 
@@ -279,21 +279,37 @@ def main():
         noiseless_estimator, ansatz, optimizer=optimizer, callback=store_intermediate_result
     )
     result = vqe.compute_minimum_eigenvalue(operator=hamiltonian_jw)
-
+    optimum_circuit = ansatz.bind_parameters(result.optimal_parameters)
     print(f"VQE on Aer qasm simulator (no noise): {result.eigenvalue:.5f}")
-    print(
-        f"Delta from reference energy value is {abs(result.eigenvalue - reference_eigenvalue):.5f}"
-    )
+    print(f"Delta from reference energy value is {abs(result.eigenvalue - reference_eigenvalue):.5f}")
     if args.verbose:
         plt.plot(counts, values)
         plt.xlabel("Eval count")
         plt.ylabel("Energy")
         plt.title("Convergence with no noise")
-        plt.savefig('VQE_result-{}d-{}-{}-{}iter.png'.format(args.dimensions, args.hubbard_size, args.vqe_optimizer,
-                                                             args.vqe_maxsteps))
+        plt.savefig(
+            'VQE_convergence-{}d-{}-{}-{}iter.png'.format(args.dimensions, args.hubbard_size, args.vqe_optimizer,
+                                                          args.vqe_maxsteps))
 
     # Density matrix of the final optimized state
-    vqe_density_matrix=simulator_density_matrix(circuit=result.optimal_circuit,use_gpu=False)
+
+    if args.verbose > 1:
+        print(result.optimal_parameters)
+
+    vqe_density_matrix = DensityMatrix.from_instruction(optimum_circuit)
+    # vqe_density_matrix = simulator_density_matrix(circuit=result.optimal_circuit, use_gpu=False)
+    if args.verbose:
+        figure = vqe_density_matrix.draw(output='hinton')
+        figure.savefig('VQE_final_density_matrix-hinton-{}d-{}-{}-{}iter.png'.format(args.dimensions, args.hubbard_size,
+                                                                                     args.vqe_optimizer,
+                                                                                     args.vqe_maxsteps))
+        text = vqe_density_matrix.draw(output='latex_source')
+        f = open('VQE_final_density_matrix-latex-{}d-{}-{}-{}iter.tex'.format(args.dimensions, args.hubbard_size,
+                                                                              args.vqe_optimizer,
+                                                                              args.vqe_maxsteps), "w")
+        f.write(text)
+        f.close()
+
     ##
     ## Now we move to pennylane for classical shadows
     ##
@@ -303,15 +319,14 @@ def main():
     else:
         dev = qml.device('default.qubit', wires=hamiltonian_jw.num_qubits)
 
+    qml_circuit = qml.from_qiskit(optimum_circuit)
+    reversed_tuple = tuple(range(hamiltonian_jw.num_qubits - 1, -1, -1))
+    print(reversed_tuple)
     @qml.qnode(dev)
     def tomography_circuit(params, **kwargs):
         observables = kwargs.pop("observable")
-        qml.from_qiskit(result.optimal_circuit)
+        qml_circuit(wires=reversed_tuple)
         return [qml.expval(o) for o in observables]
-
-    # def comparison_circuit():
-    #   qml.from_qiskit(result.optimal_circuit)
-    #    return qml.density_matrix(wires=hamiltonian_jw.num_qubits)
 
     # Now construct the shadow state
     num_snapshots = args.classical_snapshots
@@ -323,10 +338,19 @@ def main():
         print(shadow[0])
         print(shadow[1])
     shadow_state = shadow_state_reconstruction(shadow)
-    if args.verbose > 1 :
+    if args.verbose > 1:
         print(np.round(shadow_state, decimals=6))
-    cs_density_matrix=DensityMatrix(np.round(shadow_state, decimals=6))
-    print("Fidelity=", qiskit.quantum_info.state_fidelity(vqe_density_matrix,cs_density_matrix,validate=False))
+    cs_density_matrix = DensityMatrix(np.round(shadow_state, decimals=6))
+    if args.verbose:
+        figure = cs_density_matrix.draw(output='hinton')
+        figure.savefig('CS_density_matrix-hinton-{}d-{}-{}snapshots.png'.format(args.dimensions, args.hubbard_size,
+                                                                                args.classical_snapshots))
+        text = cs_density_matrix.draw(output='latex_source')
+        f = open('CS_density_matrix-latex-{}d-{}-{}snapshots.tex'.format(args.dimensions, args.hubbard_size,
+                                                                         args.classical_snapshots), "w")
+        f.write(text)
+        f.close()
+    print("Fidelity=", qiskit.quantum_info.state_fidelity(vqe_density_matrix, cs_density_matrix, validate=False))
 
     ###
     ### Outro
