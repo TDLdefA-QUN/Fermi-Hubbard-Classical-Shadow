@@ -1,6 +1,7 @@
 from qiskit_nature.second_q.hamiltonians import FermiHubbardModel
 from qiskit_nature.second_q.hamiltonians.lattices import (
     BoundaryCondition,
+    LineLattice,
     HyperCubicLattice,
     SquareLattice,
 )
@@ -21,6 +22,8 @@ import psutil
 import pennylane as qml
 import pennylane.numpy as np
 import matplotlib.pyplot as plt
+import rustworkx as rx
+from rustworkx.visualization import mpl_draw
 import time
 import argparse
 
@@ -37,18 +40,14 @@ def cubic_FHM(t, v, u, size):
     :return:
     '''
 
-    # t = -1.0  # the interaction parameter
-    # v = 0.0  # the onsite potential
-    # u = 5.0
-    # size = (2, 2, 2)
-
     boundary_condition = (
         BoundaryCondition.PERIODIC,
         BoundaryCondition.PERIODIC,
         BoundaryCondition.PERIODIC,
     )
     cubic_lattice = HyperCubicLattice(size=size, boundary_condition=boundary_condition)
-
+    fig = cubic_lattice.draw()
+    fig.savefig('Lattice-t{}-u{}-v{}-s{}.png'.format(t, u, v, size))
     QiskitNatureSettings.use_pauli_sum_op = False
 
     fhm_cubic = FermiHubbardModel(
@@ -61,6 +60,38 @@ def cubic_FHM(t, v, u, size):
 
     ham = fhm_cubic.second_q_op()
     # print(ham)
+    return ham
+
+
+def linear_FHM(t, v, u, size):
+    '''
+    Second Quantized Hamiltonian for the Fermi-Hubbard model in a periodic cube
+    Returns the hamiltonian
+    :param self:
+    :param t:the interaction parameter
+    :param v:the onsite potential
+    :param u:
+    :param size: Size of the lattice
+    :return:
+    '''
+
+    boundary_condition = (
+        BoundaryCondition.PERIODIC,
+    )
+    linear_lattice = LineLattice(num_nodes=size, boundary_condition=boundary_condition)
+    #linear_lattice.draw()
+    QiskitNatureSettings.use_pauli_sum_op = False
+
+    fhm_linear = FermiHubbardModel(
+        linear_lattice.uniform_parameters(
+            uniform_interaction=t,
+            uniform_onsite_potential=v,
+        ),
+        onsite_interaction=u,
+    )
+
+    ham = fhm_linear.second_q_op()
+    #print(ham)
     return ham
 
 
@@ -182,8 +213,19 @@ def shadow_state_reconstruction(shadow):
 
 def main():
     seed = np.random.seed(seed=int(time.time()))
-    hamiltonian_jw = JordanWignerMapper().map(cubic_FHM(t=args.hubbard_t, v=args.hubbard_v, u=args.hubbard_u, size=(
-        args.hubbard_size[0], args.hubbard_size[1], args.hubbard_size[2])))
+    if args.dimensions == 3:
+        if len(args.hubbard_size) != 3:
+            print("Size argument must exactly have three entries")
+            exit()
+        hamiltonian_jw = JordanWignerMapper().map(cubic_FHM(t=args.hubbard_t, v=args.hubbard_v, u=args.hubbard_u, size=(
+            args.hubbard_size[0], args.hubbard_size[1], args.hubbard_size[2])))
+    if args.dimensions == 1:
+        if len(args.hubbard_size) != 1:
+            print("Size argument must exactly have one entry")
+            exit()
+        hamiltonian_jw = JordanWignerMapper().map(
+            linear_FHM(t=args.hubbard_t, v=args.hubbard_v, u=args.hubbard_u, size=
+                args.hubbard_size[0]))
     if args.verbose > 1:
         print(hamiltonian_jw)
     reference_eigenvalue = classical_solver(hamiltonian_jw)
@@ -219,7 +261,6 @@ def main():
     print(
         f"Delta from reference energy value is {abs(result.eigenvalue - reference_eigenvalue):.5f}"
     )
-    import matplotlib.pyplot as plt
 
     plt.plot(counts, values)
     plt.xlabel("Eval count")
@@ -230,7 +271,7 @@ def main():
 
     # Density matrix of the final optimized state
     # print(result.optimal_circuit.data[0])
-    qiskit_density_matrix=DensityMatrix.from_instruction(result.optimal_circuit)
+    qiskit_density_matrix = DensityMatrix.from_instruction(result.optimal_circuit)
     print(qiskit_density_matrix)
     ##
     ## Now we move to pennylane for classical shadows
@@ -247,7 +288,7 @@ def main():
         qml.from_qiskit(result.optimal_circuit)
         return [qml.expval(o) for o in observables]
 
-    #def comparison_circuit():
+    # def comparison_circuit():
     #   qml.from_qiskit(result.optimal_circuit)
     #    return qml.density_matrix(wires=hamiltonian_jw.num_qubits)
 
@@ -277,9 +318,10 @@ if __name__ == "__main__":
     parser.add_argument("-ht", "--hubbard_t", type=float, default="-1.0", action="store", help="Interaction matrix")
     parser.add_argument("-hv", "--hubbard_v", type=float, default="0.0", action="store", help="Onsite parameter")
     parser.add_argument("-hu", "--hubbard_u", type=float, default="5.0", action="store", help="Onsite parameter")
-    parser.add_argument("-hs", "--hubbard_size", type=int, nargs=3, default=[2, 2, 2], metavar=('nx', 'ny', 'nz'),
+    parser.add_argument("-hs", "--hubbard_size", type=int,nargs='+', default=[2],
                         action="store", help="Size of the cubic lattice")
     parser.add_argument("-vqemax", "--vqe_maxsteps", type=int, default=200, action="store", help="VQE max steps")
+    parser.add_argument("-dim", "--dimensions", type=int, default=1, choices=range(1, 4), help="Periodic dimensions")
     parser.add_argument("-vqeopt", "--vqe_optimizer", default='spsa', choices=['spsa', 'slsqp'], help="VQE optimizer")
     parser.add_argument("-cs", "--classical_snapshots", type=int, default=1000, action="store",
                         help="Classical shadow snapshots")
@@ -290,10 +332,16 @@ if __name__ == "__main__":
         print("Qiskit Related:")
         print(Aer.backends())
     print("Fermi-Hubbard parameters:")
+    if args.dimensions == 1:
+        print("Linear periodic lattice")
+    if args.dimensions == 2:
+        print("Square periodic lattice")
+    if args.dimensions == 3:
+        print("Cubic periodic lattice")
+    print("Size of the lattice:", args.hubbard_size)
     print("t:", args.hubbard_t)
     print("v:", args.hubbard_v)
     print("u:", args.hubbard_u)
-    print("Size of the SC lattice:", args.hubbard_size)
     print("VQE parameters:")
     print("Optimizer:", args.vqe_optimizer)
     print("max iterations:", args.vqe_maxsteps)
