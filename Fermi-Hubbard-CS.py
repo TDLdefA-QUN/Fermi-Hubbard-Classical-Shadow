@@ -1,3 +1,4 @@
+import qiskit.quantum_info
 from qiskit_nature.second_q.hamiltonians import FermiHubbardModel
 from qiskit_nature.second_q.hamiltonians.lattices import (
     BoundaryCondition,
@@ -17,7 +18,7 @@ from qiskit_aer.primitives import Estimator as AerEstimator
 from qiskit.algorithms.minimum_eigensolvers import VQE
 from qiskit.algorithms.optimizers import Optimizer, OptimizerResult, OptimizerState
 from qiskit import Aer, transpile
-from qiskit.quantum_info import DensityMatrix
+from qiskit.quantum_info import DensityMatrix,state_fidelity
 import psutil
 import pennylane as qml
 import pennylane.numpy as np
@@ -79,7 +80,7 @@ def linear_FHM(t, v, u, size):
         BoundaryCondition.PERIODIC,
     )
     linear_lattice = LineLattice(num_nodes=size, boundary_condition=boundary_condition)
-    #linear_lattice.draw()
+    # linear_lattice.draw()
     QiskitNatureSettings.use_pauli_sum_op = False
 
     fhm_linear = FermiHubbardModel(
@@ -91,11 +92,33 @@ def linear_FHM(t, v, u, size):
     )
 
     ham = fhm_linear.second_q_op()
-    #print(ham)
+    # print(ham)
     return ham
 
 
 ###
+
+def simulator_density_matrix(circuit, use_gpu=True):
+    '''
+
+    Args:
+        use_gpu: Use GPUs
+        circuit: The circuit to get the density matrix
+
+    Returns:
+
+    '''
+    circuit.save_statevector()
+    simulator = Aer.get_backend('aer_simulator')
+    if use_gpu:
+        try:
+            simulator.set_options(device='GPU')
+        except:
+            print("GPU not found")
+    circuit=transpile(circuit,simulator)
+    result = simulator.run(circuit).result()
+    density_matrix=DensityMatrix(result.get_statevector(circuit))
+    return density_matrix
 
 
 ###
@@ -225,7 +248,7 @@ def main():
             exit()
         hamiltonian_jw = JordanWignerMapper().map(
             linear_FHM(t=args.hubbard_t, v=args.hubbard_v, u=args.hubbard_u, size=
-                args.hubbard_size[0]))
+            args.hubbard_size[0]))
     if args.verbose > 1:
         print(hamiltonian_jw)
     reference_eigenvalue = classical_solver(hamiltonian_jw)
@@ -261,18 +284,16 @@ def main():
     print(
         f"Delta from reference energy value is {abs(result.eigenvalue - reference_eigenvalue):.5f}"
     )
-
-    plt.plot(counts, values)
-    plt.xlabel("Eval count")
-    plt.ylabel("Energy")
-    plt.title("Convergence with no noise")
-
-    plt.savefig('VQE_result-{}-{}iter.png'.format(args.vqe_optimizer, args.vqe_maxsteps))
+    if args.verbose:
+        plt.plot(counts, values)
+        plt.xlabel("Eval count")
+        plt.ylabel("Energy")
+        plt.title("Convergence with no noise")
+        plt.savefig('VQE_result-{}d-{}-{}-{}iter.png'.format(args.dimensions, args.hubbard_size, args.vqe_optimizer,
+                                                             args.vqe_maxsteps))
 
     # Density matrix of the final optimized state
-    # print(result.optimal_circuit.data[0])
-    qiskit_density_matrix = DensityMatrix.from_instruction(result.optimal_circuit)
-    print(qiskit_density_matrix)
+    vqe_density_matrix=simulator_density_matrix(circuit=result.optimal_circuit,use_gpu=False)
     ##
     ## Now we move to pennylane for classical shadows
     ##
@@ -298,12 +319,14 @@ def main():
     shadow = calculate_classical_shadow(
         tomography_circuit, params, num_snapshots, hamiltonian_jw.num_qubits
     )
-    if args.verbose > 2:
+    if args.verbose > 1:
         print(shadow[0])
         print(shadow[1])
     shadow_state = shadow_state_reconstruction(shadow)
-    print(np.round(shadow_state, decimals=6))
-    print("Fidelity=", qml.math.fidelity(shadow_state, qiskit_density_matrix))
+    if args.verbose > 1 :
+        print(np.round(shadow_state, decimals=6))
+    cs_density_matrix=DensityMatrix(np.round(shadow_state, decimals=6))
+    print("Fidelity=", qiskit.quantum_info.state_fidelity(vqe_density_matrix,cs_density_matrix,validate=False))
 
     ###
     ### Outro
@@ -318,7 +341,7 @@ if __name__ == "__main__":
     parser.add_argument("-ht", "--hubbard_t", type=float, default="-1.0", action="store", help="Interaction matrix")
     parser.add_argument("-hv", "--hubbard_v", type=float, default="0.0", action="store", help="Onsite parameter")
     parser.add_argument("-hu", "--hubbard_u", type=float, default="5.0", action="store", help="Onsite parameter")
-    parser.add_argument("-hs", "--hubbard_size", type=int,nargs='+', default=[2],
+    parser.add_argument("-hs", "--hubbard_size", type=int, nargs='+', default=[2],
                         action="store", help="Size of the cubic lattice")
     parser.add_argument("-vqemax", "--vqe_maxsteps", type=int, default=200, action="store", help="VQE max steps")
     parser.add_argument("-dim", "--dimensions", type=int, default=1, choices=range(1, 4), help="Periodic dimensions")
