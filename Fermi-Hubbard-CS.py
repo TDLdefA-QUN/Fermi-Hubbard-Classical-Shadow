@@ -46,8 +46,6 @@ def cubic_FHM(t, v, u, size):
         BoundaryCondition.PERIODIC,
     )
     cubic_lattice = HyperCubicLattice(size=size, boundary_condition=boundary_condition)
-    fig = cubic_lattice.draw()
-    fig.savefig('Lattice-t{}-u{}-v{}-s{}.png'.format(t, u, v, size))
     QiskitNatureSettings.use_pauli_sum_op = False
 
     fhm_cubic = FermiHubbardModel(
@@ -120,7 +118,7 @@ def Minv(N, X):
     return (2 ** N + 1.) * X - np.eye(2 ** N)
 
 
-def CS_clifford(nshadows, reps, Nqubits, circuit, seed=np.random.default_rng(seed=int(time.time()))):
+def CS_clifford(nshadows, reps, Nqubits, circuit, seed):
     '''
     Classical shadow with random Clifford circuits
     Args:
@@ -128,10 +126,12 @@ def CS_clifford(nshadows, reps, Nqubits, circuit, seed=np.random.default_rng(see
         reps: Repetitions
         Nqubits: Number of qubits
         Circuit: Circuit to calculate the classical shadow of.
+        seed: Random seed
     Returns: rho_shadow, the density matrix of the classical shadow
 
     '''
-    cliffords = [qiskit.quantum_info.random_clifford(Nqubits, seed=seed) for _ in range(nshadows)]
+    rng = np.random.default_rng(seed)
+    cliffords = [qiskit.quantum_info.random_clifford(Nqubits, seed=rng) for _ in range(nshadows)]
 
     results = []
     for cliff in cliffords:
@@ -149,8 +149,74 @@ def CS_clifford(nshadows, reps, Nqubits, circuit, seed=np.random.default_rng(see
     return DensityMatrix(rho_shadow)
 
 
+###
+### Classical shadow with Paulis
+###
+def rotGate(g):
+    '''produces gate U such that U|psi> is in Pauli basis g'''
+    if g == "X":
+        return 1 / np.sqrt(2) * np.array([[1., 1.], [1., -1.]])
+    elif g == "Y":
+        return 1 / np.sqrt(2) * np.array([[1., -1.0j], [1., 1.j]])
+    elif g == "Z":
+        return np.eye(2)
+    else:
+        raise NotImplementedError(f"Unknown gate {g}")
+
+
+def bitGateMap(qc, g, qi):
+    '''Map X/Y/Z string to qiskit ops'''
+    if g == "X":
+        qc.h(qi)
+    elif g == "Y":
+        qc.sdg(qi)
+        qc.h(qi)
+    elif g == "Z":
+        pass
+    else:
+        raise NotImplementedError(f"Unknown gate {g}")
+
+
+def CS_paulis(nshadows, Nqubits, circuit, seed):
+    '''
+    Classical shadow with random Clifford circuits
+    Args:
+        nshadows: Number of shadows
+        Nqubits: Number of qubits
+        Circuit: Circuit to calculate the classical shadow of.
+        seed: Random seed
+    Returns: rho_shadow, the density matrix of the classical shadow
+
+    '''
+    rng = np.random.default_rng(seed)
+    scheme = [rng.choice(['X', 'Y', 'Z'], size=Nqubits) for _ in range(nshadows)]
+    labels, counts = np.unique(scheme, axis=0, return_counts=True)
+    results = []
+    for bit_string, count in zip(labels, counts):
+        qc_m = circuit.copy()
+        # rotate the basis for each qubit
+        for i, bit in enumerate(bit_string):
+            bitGateMap(qc_m, bit, i)
+        counts = qiskit.quantum_info.Statevector(qc_m).sample_counts(count)
+        results.append(counts)
+
+    shadows = []
+    shots = 0
+    for pauli_string, counts in zip(labels, results):
+        # iterate over measurements
+        for bit, count in counts.items():
+            mat = 1.
+            for i, bi in enumerate(bit[::-1]):
+                b = rotGate(pauli_string[i])[int(bi), :]
+                mat = np.kron(Minv(1, np.outer(b.conj(), b)), mat)
+            shadows.append(mat * count)
+            shots += count
+
+    rho_shadow = np.sum(shadows, axis=0) / shots
+    return DensityMatrix(rho_shadow)
+
+
 def main():
-    seed = np.random.seed(seed=int(time.time()))
     if args.dimensions == 3:
         if len(args.hubbard_size) != 3:
             print("Size argument must exactly have three entries")
@@ -164,6 +230,14 @@ def main():
         hamiltonian_jw = JordanWignerMapper().map(
             linear_FHM(t=args.hubbard_t, v=args.hubbard_v, u=args.hubbard_u, size=
             args.hubbard_size[0]))
+    if args.dimensions == 2:
+        if len(args.hubbard_size) != 2:
+            print("Size argument must exactly have two entries")
+            exit()
+        hamiltonian_jw = JordanWignerMapper().map(
+            linear_FHM(t=args.hubbard_t, v=args.hubbard_v, u=args.hubbard_u, size=
+            (args.hubbard_size[0], args.hubbard_size[1])))
+
     if args.verbose > 1:
         print(hamiltonian_jw)
     reference_eigenvalue = classical_solver(hamiltonian_jw)
@@ -175,15 +249,17 @@ def main():
     ansatz = TwoLocal(rotation_blocks="ry", entanglement_blocks="cz")
     counts = []
     values = []
-    algorithm_globals.random_seed = seed
+    algorithm_globals.random_seed = np.random.default_rng(args.seed)
 
     def store_intermediate_result(eval_count, parameters, mean, std):
+        if args.verbose > 1 :
+            print("VQE step:",eval_count)
         counts.append(eval_count)
         values.append(mean)
 
     noiseless_estimator = AerEstimator(
-        run_options={"seed": seed, "shots": 1024},
-        transpile_options={"seed_transpiler": seed},
+        run_options={"seed": np.random.seed(args.seed), "shots": 1024},
+        transpile_options={"seed_transpiler": np.random.seed(args.seed)},
         backend_options={"method": "automatic"}
     )
     if args.vqe_optimizer == 'spsa':
@@ -224,15 +300,23 @@ def main():
                                                                               args.vqe_maxsteps), "w")
         f.write(text)
         f.close()
-    cs_density_matrix = CS_clifford(nshadows=args.classical_snapshots, reps=1, Nqubits=hamiltonian_jw.num_qubits,
-                                    circuit=optimum_circuit)
+    if args.shadow_sampler == "clifford":
+        print("Using random Clifford circuits to construct classical shadow")
+        cs_density_matrix = CS_clifford(nshadows=args.classical_snapshots, reps=1, Nqubits=hamiltonian_jw.num_qubits,
+                                        circuit=optimum_circuit, seed=args.seed)
+    if args.shadow_sampler == "paulis":
+        print("Using random Paulis to construct classical shadow")
+        cs_density_matrix = CS_paulis(nshadows=args.classical_snapshots, Nqubits=hamiltonian_jw.num_qubits,
+                                      circuit=optimum_circuit, seed=args.seed)
     if args.verbose:
         figure = cs_density_matrix.draw(output='hinton')
-        figure.savefig('CS_density_matrix-hinton-{}d-{}-{}snapshots.png'.format(args.dimensions, args.hubbard_size,
-                                                                                args.classical_snapshots))
+        figure.savefig('CS_density_matrix-hinton-{}d-{}-{}snapshots-{}.png'.format(args.dimensions, args.hubbard_size,
+                                                                                   args.classical_snapshots,
+                                                                                   args.shadow_sampler))
         text = cs_density_matrix.draw(output='latex_source')
-        f = open('CS_density_matrix-latex-{}d-{}-{}snapshots.tex'.format(args.dimensions, args.hubbard_size,
-                                                                         args.classical_snapshots), "w")
+        f = open('CS_density_matrix-latex-{}d-{}-{}snapshots-{}.tex'.format(args.dimensions, args.hubbard_size,
+                                                                            args.classical_snapshots,
+                                                                            args.shadow_sampler), "w")
         f.write(text)
         f.close()
     print("Fidelity=", qiskit.quantum_info.state_fidelity(vqe_density_matrix, cs_density_matrix, validate=False))
@@ -255,12 +339,17 @@ if __name__ == "__main__":
     parser.add_argument("-vqemax", "--vqe_maxsteps", type=int, default=200, action="store", help="VQE max steps")
     parser.add_argument("-dim", "--dimensions", type=int, default=1, choices=range(1, 4), help="Periodic dimensions")
     parser.add_argument("-vqeopt", "--vqe_optimizer", default='spsa', choices=['spsa', 'slsqp'], help="VQE optimizer")
-    parser.add_argument("-cs", "--classical_snapshots", type=int, default=1000, action="store",
+    parser.add_argument("-csc", "--shadow_sampler", default='clifford', choices=['clifford', 'paulis'],
+                        help="How to calculate the classical shadow")
+    parser.add_argument("-csn", "--classical_snapshots", type=int, default=1000, action="store",
                         help="Classical shadow snapshots")
+    parser.add_argument("-s", "--seed", type=int, default=int(time.time()), action="store",
+                        help="Random seed")
     parser.add_argument("-gpu", default=False, action="store_true",
                         help="Enable GPU")
     args = parser.parse_args()
     if args.verbose:
+        print("Seed:", args.seed)
         print("Qiskit Related:")
         print(Aer.backends())
     print("Fermi-Hubbard parameters:")
