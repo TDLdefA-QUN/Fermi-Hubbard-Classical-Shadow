@@ -20,8 +20,7 @@ from qiskit.algorithms.optimizers import Optimizer, OptimizerResult, OptimizerSt
 from qiskit import Aer, transpile
 from qiskit.quantum_info import DensityMatrix, state_fidelity
 import psutil
-import pennylane as qml
-import pennylane.numpy as np
+import numpy as np
 import matplotlib.pyplot as plt
 import rustworkx as rx
 from rustworkx.visualization import mpl_draw
@@ -47,8 +46,6 @@ def cubic_FHM(t, v, u, size):
         BoundaryCondition.PERIODIC,
     )
     cubic_lattice = HyperCubicLattice(size=size, boundary_condition=boundary_condition)
-    fig = cubic_lattice.draw()
-    fig.savefig('Lattice-t{}-u{}-v{}-s{}.png'.format(t, u, v, size))
     QiskitNatureSettings.use_pauli_sum_op = False
 
     fhm_cubic = FermiHubbardModel(
@@ -98,29 +95,6 @@ def linear_FHM(t, v, u, size):
 
 ###
 
-def simulator_density_matrix(circuit, use_gpu=True):
-    '''
-
-    Args:
-        use_gpu: Use GPUs
-        circuit: The circuit to get the density matrix
-
-    Returns:
-
-    '''
-    circuit.save_statevector()
-    simulator = Aer.get_backend('aer_simulator')
-    if use_gpu:
-        try:
-            simulator.set_options(device='GPU')
-        except:
-            print("GPU not found")
-    circuit = transpile(circuit, simulator)
-    result = simulator.run(circuit).result()
-    density_matrix = DensityMatrix(result.get_statevector(circuit))
-    return density_matrix
-
-
 ###
 ### Embed the Hamiltonian
 ###
@@ -133,109 +107,116 @@ def classical_solver(mapped_hamiltonian):
     return ref_value
 
 
-# Helper functions for classical shadow (see https://pennylane.ai/qml/demos/tutorial_classical_shadows)
+# Helper functions for classical shadow See
+# (https://github.com/ryanlevy/shadow-tutorial/blob/main/Tutorial_Shadow_State_Tomography.ipynb)
+
+###
+### Classical shadow with random clifford circuits
+###
+def Minv(N, X):
+    '''inverse shadow channel'''
+    return (2 ** N + 1.) * X - np.eye(2 ** N)
 
 
-def calculate_classical_shadow(circuit_template, params, shadow_size, num_qubits):
-    """
-    Given a circuit, creates a collection of snapshots consisting of a bit string
-    and the index of a unitary operation.
-
+def CS_clifford(nshadows, reps, Nqubits, circuit, seed):
+    '''
+    Classical shadow with random Clifford circuits
     Args:
-        circuit_template (function): A Pennylane QNode.
-        params (array): Circuit parameters.
-        shadow_size (int): The number of snapshots in the shadow.
-        num_qubits (int): The number of qubits in the circuit.
+        nshadows: Number of shadows
+        reps: Repetitions
+        Nqubits: Number of qubits
+        Circuit: Circuit to calculate the classical shadow of.
+        seed: Random seed
+    Returns: rho_shadow, the density matrix of the classical shadow
 
-    Returns:
-        Tuple of two numpy arrays. The first array contains measurement outcomes (-1, 1)
-        while the second array contains the index for the sampled Pauli's (0,1,2=X,Y,Z).
-        Each row of the arrays corresponds to a distinct snapshot or sample while each
-        column corresponds to a different qubit.
-    """
-    # applying the single-qubit Clifford circuit is equivalent to measuring a Pauli
-    unitary_ensemble = [qml.PauliX, qml.PauliY, qml.PauliZ]
+    '''
+    rng = np.random.default_rng(seed)
+    cliffords = [qiskit.quantum_info.random_clifford(Nqubits, seed=rng) for _ in range(nshadows)]
 
-    # sample random Pauli measurements uniformly, where 0,1,2 = X,Y,Z
-    unitary_ids = np.random.randint(0, 3, size=(shadow_size, num_qubits))
-    outcomes = np.zeros((shadow_size, num_qubits))
+    results = []
+    for cliff in cliffords:
+        qc_c = circuit.compose(cliff.to_circuit())
+        counts = qiskit.quantum_info.Statevector(qc_c).sample_counts(reps)
+        results.append(counts)
+    shadows = []
+    for cliff, res in zip(cliffords, results):
+        mat = cliff.adjoint().to_matrix()
+        for bit, count in res.items():
+            Ub = mat[:, int(bit, 2)]  # this is Udag|b>
+            shadows.append(Minv(Nqubits, np.outer(Ub, Ub.conj())) * count)
 
-    for ns in range(shadow_size):
-        # for each snapshot, add a random Pauli observable at each location
-        obs = [unitary_ensemble[int(unitary_ids[ns, i])](i) for i in range(num_qubits)]
-        outcomes[ns, :] = circuit_template(params, observable=obs)
-
-    # combine the computational basis outcomes and the sampled unitaries
-    return (outcomes, unitary_ids)
+    rho_shadow = np.sum(shadows, axis=0) / (nshadows * reps)
+    return DensityMatrix(rho_shadow)
 
 
-def snapshot_state(b_list, obs_list):
-    """
-    Helper function for `shadow_state_reconstruction` that reconstructs
-     a state from a single snapshot in a shadow.
+###
+### Classical shadow with Paulis
+###
+def rotGate(g):
+    '''produces gate U such that U|psi> is in Pauli basis g'''
+    if g == "X":
+        return 1 / np.sqrt(2) * np.array([[1., 1.], [1., -1.]])
+    elif g == "Y":
+        return 1 / np.sqrt(2) * np.array([[1., -1.0j], [1., 1.j]])
+    elif g == "Z":
+        return np.eye(2)
+    else:
+        raise NotImplementedError(f"Unknown gate {g}")
 
-    Implements Eq. (S44) from https://arxiv.org/pdf/2002.08953.pdf
 
+def bitGateMap(qc, g, qi):
+    '''Map X/Y/Z string to qiskit ops'''
+    if g == "X":
+        qc.h(qi)
+    elif g == "Y":
+        qc.sdg(qi)
+        qc.h(qi)
+    elif g == "Z":
+        pass
+    else:
+        raise NotImplementedError(f"Unknown gate {g}")
+
+
+def CS_paulis(nshadows, Nqubits, circuit, seed):
+    '''
+    Classical shadow with random Clifford circuits
     Args:
-        b_list (array): The list of classical outcomes for the snapshot.
-        obs_list (array): Indices for the applied Pauli measurement.
+        nshadows: Number of shadows
+        Nqubits: Number of qubits
+        Circuit: Circuit to calculate the classical shadow of.
+        seed: Random seed
+    Returns: rho_shadow, the density matrix of the classical shadow
 
-    Returns:
-        Numpy array with the reconstructed snapshot.
-    """
-    num_qubits = len(b_list)
+    '''
+    rng = np.random.default_rng(seed)
+    scheme = [rng.choice(['X', 'Y', 'Z'], size=Nqubits) for _ in range(nshadows)]
+    labels, counts = np.unique(scheme, axis=0, return_counts=True)
+    results = []
+    for bit_string, count in zip(labels, counts):
+        qc_m = circuit.copy()
+        # rotate the basis for each qubit
+        for i, bit in enumerate(bit_string):
+            bitGateMap(qc_m, bit, i)
+        counts = qiskit.quantum_info.Statevector(qc_m).sample_counts(count)
+        results.append(counts)
 
-    # computational basis states
-    zero_state = np.array([[1, 0], [0, 0]])
-    one_state = np.array([[0, 0], [0, 1]])
+    shadows = []
+    shots = 0
+    for pauli_string, counts in zip(labels, results):
+        # iterate over measurements
+        for bit, count in counts.items():
+            mat = 1.
+            for i, bi in enumerate(bit[::-1]):
+                b = rotGate(pauli_string[i])[int(bi), :]
+                mat = np.kron(Minv(1, np.outer(b.conj(), b)), mat)
+            shadows.append(mat * count)
+            shots += count
 
-    # local qubit unitaries
-    phase_z = np.array([[1, 0], [0, -1j]], dtype=complex)
-    hadamard = qml.matrix(qml.Hadamard(0))
-    identity = qml.matrix(qml.Identity(0))
-
-    # undo the rotations that were added implicitly to the circuit for the Pauli measurements
-    unitaries = [hadamard, hadamard @ phase_z, identity]
-
-    # reconstructing the snapshot state from local Pauli measurements
-    rho_snapshot = [1]
-    for i in range(num_qubits):
-        state = zero_state if b_list[i] == 1 else one_state
-        U = unitaries[int(obs_list[i])]
-
-        # applying Eq. (S44)
-        local_rho = 3 * (U.conj().T @ state @ U) - identity
-        rho_snapshot = np.kron(rho_snapshot, local_rho)
-
-    return rho_snapshot
-
-
-def shadow_state_reconstruction(shadow):
-    """
-    Reconstruct a state approximation as an average over all snapshots in the shadow.
-
-    Args:
-        shadow (tuple): A shadow tuple obtained from `calculate_classical_shadow`.
-
-    Returns:
-        Numpy array with the reconstructed quantum state.
-    """
-    num_snapshots, num_qubits = shadow[0].shape
-
-    # classical values
-    b_lists, obs_lists = shadow
-
-    # Averaging over snapshot states.
-    shadow_rho = np.zeros((2 ** num_qubits, 2 ** num_qubits), dtype=complex)
-    for i in range(num_snapshots):
-        print("iteration {:05d} of {:05d}".format(i, num_snapshots))
-        shadow_rho += snapshot_state(b_lists[i], obs_lists[i])
-
-    return shadow_rho / num_snapshots
+    rho_shadow = np.sum(shadows, axis=0) / shots
+    return DensityMatrix(rho_shadow)
 
 
 def main():
-    seed = np.random.seed(seed=int(time.time()))
     if args.dimensions == 3:
         if len(args.hubbard_size) != 3:
             print("Size argument must exactly have three entries")
@@ -249,6 +230,14 @@ def main():
         hamiltonian_jw = JordanWignerMapper().map(
             linear_FHM(t=args.hubbard_t, v=args.hubbard_v, u=args.hubbard_u, size=
             args.hubbard_size[0]))
+    if args.dimensions == 2:
+        if len(args.hubbard_size) != 2:
+            print("Size argument must exactly have two entries")
+            exit()
+        hamiltonian_jw = JordanWignerMapper().map(
+            linear_FHM(t=args.hubbard_t, v=args.hubbard_v, u=args.hubbard_u, size=
+            (args.hubbard_size[0], args.hubbard_size[1])))
+
     if args.verbose > 1:
         print(hamiltonian_jw)
     reference_eigenvalue = classical_solver(hamiltonian_jw)
@@ -260,15 +249,17 @@ def main():
     ansatz = TwoLocal(rotation_blocks="ry", entanglement_blocks="cz")
     counts = []
     values = []
-    algorithm_globals.random_seed = seed
+    algorithm_globals.random_seed = np.random.default_rng(args.seed)
 
     def store_intermediate_result(eval_count, parameters, mean, std):
+        if args.verbose > 1 :
+            print("VQE step:",eval_count)
         counts.append(eval_count)
         values.append(mean)
 
     noiseless_estimator = AerEstimator(
-        run_options={"seed": seed, "shots": 1024},
-        transpile_options={"seed_transpiler": seed},
+        run_options={"seed": np.random.seed(args.seed), "shots": 1024},
+        transpile_options={"seed_transpiler": np.random.seed(args.seed)},
         backend_options={"method": "automatic"}
     )
     if args.vqe_optimizer == 'spsa':
@@ -309,45 +300,23 @@ def main():
                                                                               args.vqe_maxsteps), "w")
         f.write(text)
         f.close()
-
-    ##
-    ## Now we move to pennylane for classical shadows
-    ##
-    # First we need to convert the optimized circuit from Qiskit VQE to a Pennylane qnode
-    if args.gpu:
-        dev = qml.device('lightning.gpu', wires=hamiltonian_jw.num_qubits)
-    else:
-        dev = qml.device('default.qubit', wires=hamiltonian_jw.num_qubits)
-
-    qml_circuit = qml.from_qiskit(optimum_circuit)
-    reversed_tuple = tuple(range(hamiltonian_jw.num_qubits - 1, -1, -1))
-    print(reversed_tuple)
-    @qml.qnode(dev)
-    def tomography_circuit(params, **kwargs):
-        observables = kwargs.pop("observable")
-        qml_circuit(wires=reversed_tuple)
-        return [qml.expval(o) for o in observables]
-
-    # Now construct the shadow state
-    num_snapshots = args.classical_snapshots
-    params = []
-    shadow = calculate_classical_shadow(
-        tomography_circuit, params, num_snapshots, hamiltonian_jw.num_qubits
-    )
-    if args.verbose > 1:
-        print(shadow[0])
-        print(shadow[1])
-    shadow_state = shadow_state_reconstruction(shadow)
-    if args.verbose > 1:
-        print(np.round(shadow_state, decimals=6))
-    cs_density_matrix = DensityMatrix(np.round(shadow_state, decimals=6))
+    if args.shadow_sampler == "clifford":
+        print("Using random Clifford circuits to construct classical shadow")
+        cs_density_matrix = CS_clifford(nshadows=args.classical_snapshots, reps=1, Nqubits=hamiltonian_jw.num_qubits,
+                                        circuit=optimum_circuit, seed=args.seed)
+    if args.shadow_sampler == "paulis":
+        print("Using random Paulis to construct classical shadow")
+        cs_density_matrix = CS_paulis(nshadows=args.classical_snapshots, Nqubits=hamiltonian_jw.num_qubits,
+                                      circuit=optimum_circuit, seed=args.seed)
     if args.verbose:
         figure = cs_density_matrix.draw(output='hinton')
-        figure.savefig('CS_density_matrix-hinton-{}d-{}-{}snapshots.png'.format(args.dimensions, args.hubbard_size,
-                                                                                args.classical_snapshots))
+        figure.savefig('CS_density_matrix-hinton-{}d-{}-{}snapshots-{}.png'.format(args.dimensions, args.hubbard_size,
+                                                                                   args.classical_snapshots,
+                                                                                   args.shadow_sampler))
         text = cs_density_matrix.draw(output='latex_source')
-        f = open('CS_density_matrix-latex-{}d-{}-{}snapshots.tex'.format(args.dimensions, args.hubbard_size,
-                                                                         args.classical_snapshots), "w")
+        f = open('CS_density_matrix-latex-{}d-{}-{}snapshots-{}.tex'.format(args.dimensions, args.hubbard_size,
+                                                                            args.classical_snapshots,
+                                                                            args.shadow_sampler), "w")
         f.write(text)
         f.close()
     print("Fidelity=", qiskit.quantum_info.state_fidelity(vqe_density_matrix, cs_density_matrix, validate=False))
@@ -370,12 +339,17 @@ if __name__ == "__main__":
     parser.add_argument("-vqemax", "--vqe_maxsteps", type=int, default=200, action="store", help="VQE max steps")
     parser.add_argument("-dim", "--dimensions", type=int, default=1, choices=range(1, 4), help="Periodic dimensions")
     parser.add_argument("-vqeopt", "--vqe_optimizer", default='spsa', choices=['spsa', 'slsqp'], help="VQE optimizer")
-    parser.add_argument("-cs", "--classical_snapshots", type=int, default=1000, action="store",
+    parser.add_argument("-csc", "--shadow_sampler", default='clifford', choices=['clifford', 'paulis'],
+                        help="How to calculate the classical shadow")
+    parser.add_argument("-csn", "--classical_snapshots", type=int, default=1000, action="store",
                         help="Classical shadow snapshots")
+    parser.add_argument("-s", "--seed", type=int, default=int(time.time()), action="store",
+                        help="Random seed")
     parser.add_argument("-gpu", default=False, action="store_true",
                         help="Enable GPU")
     args = parser.parse_args()
     if args.verbose:
+        print("Seed:", args.seed)
         print("Qiskit Related:")
         print(Aer.backends())
     print("Fermi-Hubbard parameters:")
