@@ -330,7 +330,7 @@ def main():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Fermi Hubbard Classical Shadow')
-    parser.add_argument("-v", "--verbose", action="store_true", help="increase output verbosity")
+    parser.add_argument("-v", "--verbose", action="count",default=0, help="increase output verbosity")
     parser.add_argument("-ht", "--hubbard_t", type=float, default="-1.0", action="store", help="Interaction matrix")
     parser.add_argument("-hv", "--hubbard_v", type=float, default="0.0", action="store", help="Onsite parameter")
     parser.add_argument("-hu", "--hubbard_u", type=float, default="5.0", action="store", help="Onsite parameter")
