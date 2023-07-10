@@ -7,11 +7,12 @@ from qiskit_nature.second_q.hamiltonians.lattices import (
     SquareLattice,
 )
 from qiskit_nature.second_q.mappers import JordanWignerMapper
-from qiskit_nature.second_q.problems import LatticeModelProblem
+from qiskit_nature.second_q.problems import LatticeModelProblem,ElectronicStructureProblem
 from qiskit.algorithms import NumPyMinimumEigensolver
 from qiskit.opflow import PauliSumOp
 from qiskit_nature.settings import QiskitNatureSettings
 from qiskit.circuit.library import TwoLocal
+from qiskit_nature.second_q.circuit.library import UCCSD, HartreeFock
 from qiskit.algorithms.optimizers import SLSQP, SPSA
 from qiskit.utils import algorithm_globals
 from qiskit_aer.primitives import Estimator as AerEstimator
@@ -27,6 +28,11 @@ from rustworkx.visualization import mpl_draw
 import time
 import argparse
 
+from qiskit.algorithms.minimum_eigensolvers import AdaptVQE, VQE
+from qiskit.algorithms.optimizers import SLSQP,ADAM
+from qiskit.primitives import Estimator
+from qiskit.circuit.library import EvolvedOperatorAnsatz
+from qiskit_nature.second_q.algorithms import GroundStateEigensolver
 
 def cubic_FHM(t, v, u, size):
     '''
@@ -56,7 +62,8 @@ def cubic_FHM(t, v, u, size):
         onsite_interaction=u,
     )
 
-    ham = fhm_cubic.second_q_op()
+    # ham = fhm_cubic.second_q_op()
+    ham = fhm_cubic
     # print(ham)
     return ham
 
@@ -79,6 +86,7 @@ def linear_FHM(t, v, u, size):
     linear_lattice = LineLattice(num_nodes=size, boundary_condition=boundary_condition)
     # linear_lattice.draw()
     QiskitNatureSettings.use_pauli_sum_op = False
+    # QiskitNatureSettings.use_pauli_sum_op = True
 
     fhm_linear = FermiHubbardModel(
         linear_lattice.uniform_parameters(
@@ -88,7 +96,8 @@ def linear_FHM(t, v, u, size):
         onsite_interaction=u,
     )
 
-    ham = fhm_linear.second_q_op()
+    # ham = fhm_linear.second_q_op()
+    ham = fhm_linear
     # print(ham)
     return ham
 
@@ -106,6 +115,66 @@ def classical_solver(mapped_hamiltonian):
     print(f"Reference value: {ref_value:.5f}")
     return ref_value
 
+def adapt_vqe_solver(hamiltonian):
+    
+    problem = ElectronicStructureProblem(hamiltonian)
+
+    mapper = JordanWignerMapper()
+
+    noqubits = mapper.map(hamiltonian.second_q_op()).num_qubits
+    tl_circuit = TwoLocal(
+        noqubits,
+        rotation_blocks=["h", "rx"],
+        entanglement_blocks="cz",
+        entanglement="full",
+        reps=2,
+        parameter_prefix="y",
+    )
+    # tl_circuit = TwoLocal(noqubits,rotation_blocks="ry", entanglement_blocks="cz")
+    ansatz = EvolvedOperatorAnsatz(tl_circuit)
+    # print("PROBLEM: ", problem.num_spatial_orbitals)
+    # ansatz = EvolvedOperatorAnsatz(
+    #     UCCSD(
+    #         problem.num_spatial_orbitals,
+    #         problem.num_particles,
+    #         mapper,
+    #         initial_state=HartreeFock(
+    #             problem.num_spatial_orbitals,
+    #             problem.num_particles,
+    #             mapper,
+    #         ),
+    #     )
+    # )
+    # ansatz = EvolvedOperatorAnsatz(
+    #     UCCSD(
+    #         problem.num_spatial_orbitals,
+    #         (1,1),
+    #         mapper,
+    #         initial_state=HartreeFock(
+    #             problem.num_spatial_orbitals,
+    #             (1,1),
+    #             mapper,
+    #         ),
+    #     )
+    # )
+    vqe = VQE(Estimator(), ansatz, SLSQP())
+    vqe.initial_point = np.zeros(ansatz.num_parameters)
+
+    adapt_vqe = AdaptVQE(vqe)
+    adapt_vqe.supports_aux_operators = lambda: True
+    # eigenvalue, _ = adapt_vqe.compute_minimum_eigenvalue(hamiltonian)
+    # return eigenvalue
+    solver = GroundStateEigensolver(mapper, adapt_vqe)
+    # solver = GroundStateEigensolver(mapper, vqe)
+    result = solver.solve(problem)
+
+    # print(f"Total ground state energy = {result.total_energies[0]:.4f}")
+    return result.total_energies
+
+
+
+    # eigenvalue, _ = adapt_vqe.compute_minimum_eigenvalue(hamiltonian)
+    # return eigenvalue
 
 # Helper functions for classical shadow See
 # (https://github.com/ryanlevy/shadow-tutorial/blob/main/Tutorial_Shadow_State_Tomography.ipynb)
@@ -221,27 +290,35 @@ def main():
         if len(args.hubbard_size) != 3:
             print("Size argument must exactly have three entries")
             exit()
-        hamiltonian_jw = JordanWignerMapper().map(cubic_FHM(t=args.hubbard_t, v=args.hubbard_v, u=args.hubbard_u, size=(
-            args.hubbard_size[0], args.hubbard_size[1], args.hubbard_size[2])))
-    if args.dimensions == 1:
+        # hamiltonian_jw = JordanWignerMapper().map(cubic_FHM(t=args.hubbard_t, v=args.hubbard_v, u=args.hubbard_u, size=(
+        #     args.hubbard_size[0], args.hubbard_size[1], args.hubbard_size[2])))
+        fhm = cubic_FHM(t=args.hubbard_t, v=args.hubbard_v, u=args.hubbard_u, size=args.hubbard_size[0:3])
+    elif args.dimensions == 1:
         if len(args.hubbard_size) != 1:
             print("Size argument must exactly have one entry")
             exit()
-        hamiltonian_jw = JordanWignerMapper().map(
-            linear_FHM(t=args.hubbard_t, v=args.hubbard_v, u=args.hubbard_u, size=
-            args.hubbard_size[0]))
-    if args.dimensions == 2:
+        # hamiltonian_jw = JordanWignerMapper().map(
+        #     linear_FHM(t=args.hubbard_t, v=args.hubbard_v, u=args.hubbard_u, size=
+        #     args.hubbard_size[0]))
+        fhm = linear_FHM(t=args.hubbard_t, v=args.hubbard_v, u=args.hubbard_u, size=args.hubbard_size[0])
+    elif args.dimensions == 2:
         if len(args.hubbard_size) != 2:
             print("Size argument must exactly have two entries")
             exit()
-        hamiltonian_jw = JordanWignerMapper().map(
-            linear_FHM(t=args.hubbard_t, v=args.hubbard_v, u=args.hubbard_u, size=
-            (args.hubbard_size[0], args.hubbard_size[1])))
+        # hamiltonian_jw = JordanWignerMapper().map(
+        #     linear_FHM(t=args.hubbard_t, v=args.hubbard_v, u=args.hubbard_u, size=
+        #     (args.hubbard_size[0], args.hubbard_size[1])))
+        fhm = linear_FHM(t=args.hubbard_t, v=args.hubbard_v, u=args.hubbard_u, size=args.hubbard_size[0:2])
+    hamiltonian_jw = JordanWignerMapper().map(fhm.second_q_op())
 
     if args.verbose > 1:
         print(hamiltonian_jw)
-    reference_eigenvalue = classical_solver(hamiltonian_jw)
-
+    # reference_eigenvalue = classical_solver(hamiltonian_jw)
+    # avqe = adapt_vqe_solver(hamiltonian_jw)
+    avqe = adapt_vqe_solver(linear_FHM(t=args.hubbard_t, v=args.hubbard_v, u=args.hubbard_u, size=args.hubbard_size[0]))
+    print("sdkhfgsdkfjhskdjfhskjdfhsdlfjh")
+    print(avqe)
+    print("aaaaaaaaaaaaaaaaaaaa")
     ###
     ### VQE See Peruzzo, A., et al, “A variational eigenvalue solver on a quantum processor” arXiv:1304.3061
     ###
@@ -334,14 +411,14 @@ if __name__ == "__main__":
     parser.add_argument("-ht", "--hubbard_t", type=float, default="-1.0", action="store", help="Interaction matrix")
     parser.add_argument("-hv", "--hubbard_v", type=float, default="0.0", action="store", help="Onsite parameter")
     parser.add_argument("-hu", "--hubbard_u", type=float, default="5.0", action="store", help="Onsite parameter")
-    parser.add_argument("-hs", "--hubbard_size", type=int, nargs='+', default=[2],
+    parser.add_argument("-hs", "--hubbard_size", type=int, nargs='+', default=[1],
                         action="store", help="Size of the cubic lattice")
-    parser.add_argument("-vqemax", "--vqe_maxsteps", type=int, default=200, action="store", help="VQE max steps")
+    parser.add_argument("-vqemax", "--vqe_maxsteps", type=int, default=5, action="store", help="VQE max steps")
     parser.add_argument("-dim", "--dimensions", type=int, default=1, choices=range(1, 4), help="Periodic dimensions")
     parser.add_argument("-vqeopt", "--vqe_optimizer", default='spsa', choices=['spsa', 'slsqp'], help="VQE optimizer")
     parser.add_argument("-csc", "--shadow_sampler", default='clifford', choices=['clifford', 'paulis'],
                         help="How to calculate the classical shadow")
-    parser.add_argument("-csn", "--classical_snapshots", type=int, default=1000, action="store",
+    parser.add_argument("-csn", "--classical_snapshots", type=int, default=10, action="store",
                         help="Classical shadow snapshots")
     parser.add_argument("-s", "--seed", type=int, default=int(time.time()), action="store",
                         help="Random seed")
