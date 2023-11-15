@@ -291,13 +291,13 @@ def main():
     # vqe_density_matrix = simulator_density_matrix(circuit=result.optimal_circuit, use_gpu=False)
     if args.verbose:
         figure = vqe_density_matrix.draw(output='hinton')
-        figure.savefig('VQE_final_density_matrix-hinton-{}d-{}-{}-{}iter.png'.format(args.dimensions, args.hubbard_size,
+        figure.savefig('VQE_final_density_matrix-hinton-{}d-{}-{}-{}iter-{}.png'.format(args.dimensions, args.hubbard_size,
                                                                                      args.vqe_optimizer,
-                                                                                     args.vqe_maxsteps))
+                                                                                     args.vqe_maxsteps,args.run_id))
         text = vqe_density_matrix.draw(output='latex_source')
-        f = open('VQE_final_density_matrix-latex-{}d-{}-{}-{}iter.tex'.format(args.dimensions, args.hubbard_size,
+        f = open('VQE_final_density_matrix-latex-{}d-{}-{}-{}iter-{}.tex'.format(args.dimensions, args.hubbard_size,
                                                                               args.vqe_optimizer,
-                                                                              args.vqe_maxsteps), "w")
+                                                                              args.vqe_maxsteps,args.run_id), "w")
         f.write(text)
         f.close()
     if args.shadow_sampler == "clifford":
@@ -310,13 +310,13 @@ def main():
                                       circuit=optimum_circuit, seed=args.seed)
     if args.verbose:
         figure = cs_density_matrix.draw(output='hinton')
-        figure.savefig('CS_density_matrix-hinton-{}d-{}-{}snapshots-{}.png'.format(args.dimensions, args.hubbard_size,
+        figure.savefig('CS_density_matrix-hinton-{}d-{}-{}snapshots-{}-{}.png'.format(args.dimensions, args.hubbard_size,
                                                                                    args.classical_snapshots,
-                                                                                   args.shadow_sampler))
+                                                                                   args.shadow_sampler,args.run_id))
         text = cs_density_matrix.draw(output='latex_source')
-        f = open('CS_density_matrix-latex-{}d-{}-{}snapshots-{}.tex'.format(args.dimensions, args.hubbard_size,
+        f = open('CS_density_matrix-latex-{}d-{}-{}snapshots-{}-{}.tex'.format(args.dimensions, args.hubbard_size,
                                                                             args.classical_snapshots,
-                                                                            args.shadow_sampler), "w")
+                                                                            args.shadow_sampler,args.run_id), "w")
         f.write(text)
         f.close()
     print("Fidelity=", qiskit.quantum_info.state_fidelity(vqe_density_matrix, cs_density_matrix, validate=False))
@@ -347,6 +347,8 @@ if __name__ == "__main__":
                         help="Random seed")
     parser.add_argument("-gpu", default=False, action="store_true",
                         help="Enable GPU")
+    parser.add_argument("-id", "--run_id", default=time.strftime("%m%d%Y%H%M%S",time.localtime()), action="store",
+                        help="ID of the run")
     args = parser.parse_args()
     if args.verbose:
         print("Seed:", args.seed)
@@ -371,4 +373,5 @@ if __name__ == "__main__":
     print("")
     if args.gpu:
         print("GPU will be used")
+    print("Run ID:",args.run_id)
     main()
