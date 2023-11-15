@@ -1,4 +1,4 @@
-# Fermi-Hubbard Phase space mapper
+# Fermi-Hubbard Classical Shadow Algorithm tests
 
 This code is intended to map the phase space of Fermi-Hubbard Hamiltonians using Quantum Computers and Classical shadows. 
 
