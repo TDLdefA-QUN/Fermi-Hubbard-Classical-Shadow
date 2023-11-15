@@ -279,8 +279,8 @@ def main():
         plt.ylabel("Energy")
         plt.title("Convergence with no noise")
         plt.savefig(
-            'VQE_convergence-{}d-{}-{}-{}iter.png'.format(args.dimensions, args.hubbard_size, args.vqe_optimizer,
-                                                          args.vqe_maxsteps))
+            'VQE_convergence-{}d-{}-{}-{}iter-{}.png'.format(args.dimensions, args.hubbard_size, args.vqe_optimizer,
+                                                          args.vqe_maxsteps,args.run_id))
 
     # Density matrix of the final optimized state
 
