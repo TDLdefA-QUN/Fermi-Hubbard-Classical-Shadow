@@ -77,4 +77,4 @@ def reverse_jwt(ops: SparsePauliOp):
 
         transformed_operator += coeff * transformed_term
 
-    return transformed_operator.simplify()
+    return transformed_operator.simplify().normal_order()

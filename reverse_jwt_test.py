@@ -6,11 +6,11 @@ from reverse_jwt import reverse_jwt
 qiskit_nature.settings.use_pauli_sum_op = False
 
 def test(op,coef):
-    fo = FermionicOp({op: coef})
+    fo = FermionicOp({op: coef}).normal_order()
     qo = JordanWignerMapper().map(fo)
     rjwt = reverse_jwt(qo)
 
-    return fo, qo, rjwt, fo == rjwt
+    return fo, rjwt, fo.equiv(rjwt)
 
 
 tests = [
